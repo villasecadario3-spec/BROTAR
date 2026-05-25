@@ -1,0 +1,17 @@
+{
+  "name": "generador-fichas-ds49",
+  "version": "1.0.0",
+  "description": "Generador de Fichas Diagnósticas DS49 - Brotar Entidad Patrocinante",
+  "scripts": {
+    "dev": "netlify dev"
+  },
+  "dependencies": {
+    "docx": "^9.6.1",
+    "xlsx": "^0.18.5",
+    "jszip": "^3.10.1",
+    "busboy": "^1.6.0"
+  },
+  "devDependencies": {
+    "netlify-cli": "^17.0.0"
+  }
+}
