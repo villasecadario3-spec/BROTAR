@@ -200,7 +200,7 @@
           <select id="cfgComuna">
             <option value="" disabled selected>Selecciona una comuna</option>
             <option value="RENGO">Rengo</option>
-            <option value="MELIPILLA">Melipilla</option>
+            <option value="METROPOLITANA">Metropolitana</option>
           </select>
         </div>
         <div class="field"><label>N° familias postulantes</label><input type="text" id="cfgFamilias" placeholder="Ej: 289"></div>
@@ -353,7 +353,7 @@ async function generarFichas() {
   progressBlock.classList.add('show');
   progressFill.style.width = '0%';
   progressCount.textContent = `0 / ${totalRows}`;
-  progressLabel.textContent = 'Iniciando generación...';
+  progressLabel.textContent = 'Generando archivos en formato SERVIU, favor esperar de 2 a 5 minutos...';
   progressLog.textContent = '';
  
   const BATCH_SIZE = 25;
@@ -366,8 +366,8 @@ async function generarFichas() {
     while (processed < totalRows) {
       const batchNum = Math.floor(processed/BATCH_SIZE)+1;
       const batchTotal = Math.ceil(totalRows/BATCH_SIZE);
-      progressLabel.textContent = `Generando lote ${batchNum} de ${batchTotal}...`;
-      progressLog.textContent = `Fichas ${processed + 1}–${Math.min(processed + BATCH_SIZE, totalRows)} de ${totalRows}`;
+      progressLabel.textContent = 'Generando archivos en formato SERVIU, favor esperar de 2 a 5 minutos...';
+      progressLog.textContent = '';
  
       const resp = await fetch('/.netlify/functions/generar', {
         method: 'POST',
@@ -400,7 +400,7 @@ async function generarFichas() {
     }
  
     // Construir ZIP final directamente en binario sin recomprimir
-    progressLabel.textContent = 'Empaquetando archivos...';
+    progressLabel.textContent = 'Generando archivos en formato SERVIU, favor esperar de 2 a 5 minutos...';
     progressFill.style.width = '92%';
  
     // Pequeña pausa para que el navegador respire
