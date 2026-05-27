@@ -27,7 +27,10 @@ exports.handler = async (event) => {
     const wb = XLSX.read(excelBuf, { type: 'buffer' });
     const ws = wb.Sheets[wb.SheetNames[0]];
     const data = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
-    const allRows = data.slice(1).map(r => r.map(v => v === null || v === undefined ? '' : String(v).trim()));
+    // Filtrar filas vacías (sin nombre ni RUT) — evita generar fichas de respuestas incompletas
+    const allRows = data.slice(1)
+      .map(r => r.map(v => v === null || v === undefined ? '' : String(v).trim()))
+      .filter(r => (r[1] || '').trim() !== '' || (r[2] || '').trim() !== '' || (r[4] || '').trim() !== '');
     const totalRows = allRows.length;
  
     // Procesar solo el lote solicitado
