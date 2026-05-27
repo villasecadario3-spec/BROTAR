@@ -6,6 +6,7 @@
 <title>Generador de Fichas DS49 — Brotar</title>
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
   :root {
@@ -331,35 +332,65 @@ async function generarFichas() {
   progressBlock.classList.add('show');
   progressFill.style.width = '0%';
   progressCount.textContent = `0 / ${totalRows}`;
-  progressLabel.textContent = 'Enviando al servidor...';
-  progressLog.textContent = 'Esto puede tomar entre 1 y 3 minutos según la cantidad de familias.';
+  progressLabel.textContent = 'Iniciando generación...';
+  progressLog.textContent = '';
+ 
+  const BATCH_SIZE = 25;
+  const masterZip = new JSZip();
+  let processed = 0;
+  const config = cfg();
  
   try {
-    const resp = await fetch('/.netlify/functions/generar', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ excelBase64, config: cfg() })
-    });
+    while (processed < totalRows) {
+      progressLabel.textContent = `Generando fichas ${processed + 1}–${Math.min(processed + BATCH_SIZE, totalRows)} de ${totalRows}...`;
+      progressLog.textContent = `Lote ${Math.floor(processed/BATCH_SIZE)+1} de ${Math.ceil(totalRows/BATCH_SIZE)}`;
  
-    if(!resp.ok) {
-      const err = await resp.json().catch(()=>({error: 'Error del servidor'}));
-      throw new Error(err.error || `Error ${resp.status}`);
+      const resp = await fetch('/.netlify/functions/generar', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ excelBase64, config, batchStart: processed, batchSize: BATCH_SIZE })
+      });
+ 
+      if(!resp.ok) {
+        const err = await resp.json().catch(()=>({error: `Error HTTP ${resp.status}`}));
+        throw new Error(err.error || `Error ${resp.status}`);
+      }
+ 
+      const result = await resp.json();
+ 
+      // Extraer archivos del ZIP parcial y agregarlos al ZIP maestro
+      const batchBytes = Uint8Array.from(atob(result.zipBase64), c => c.charCodeAt(0));
+      const batchZip = await JSZip.loadAsync(batchBytes);
+      const fileNames = Object.keys(batchZip.files);
+      for (const fname of fileNames) {
+        const fileData = await batchZip.files[fname].async('uint8array');
+        masterZip.file(fname, fileData);
+      }
+ 
+      processed = result.batchEnd;
+      const pct = Math.round((processed / totalRows) * 90);
+      progressFill.style.width = pct + '%';
+      progressCount.textContent = `${processed} / ${totalRows}`;
+ 
+      if (result.done) break;
     }
  
-    progressFill.style.width = '60%';
-    progressLabel.textContent = 'Procesando respuesta...';
+    progressLabel.textContent = 'Comprimiendo ZIP final...';
+    progressFill.style.width = '95%';
  
-    const result = await resp.json();
-    progressFill.style.width = '90%';
-    progressLabel.textContent = 'Preparando descarga...';
+    const finalZip = await masterZip.generateAsync({
+      type: 'blob',
+      compression: 'DEFLATE',
+      compressionOptions: { level: 6 }
+    });
  
-    const zipBytes = Uint8Array.from(atob(result.zipBase64), c => c.charCodeAt(0));
-    zipBlob = new Blob([zipBytes], {type: 'application/zip'});
+    zipBlob = finalZip;
     progressFill.style.width = '100%';
-    progressCount.textContent = `${result.total} / ${result.total}`;
-    progressLabel.textContent = `✓ ${result.total} fichas generadas correctamente`;
+    progressCount.textContent = `${totalRows} / ${totalRows}`;
+    progressLabel.textContent = `✓ ${totalRows} fichas generadas correctamente`;
     progressLog.textContent = '';
     btnDescargar.classList.add('show');
+ 
   } catch(err) {
     showError('Error al generar fichas: ' + err.message);
     progressLabel.textContent = 'Error al procesar';
