@@ -336,14 +336,17 @@ async function generarFichas() {
   progressLog.textContent = '';
  
   const BATCH_SIZE = 25;
-  const masterZip = new JSZip();
-  let processed = 0;
   const config = cfg();
+  // Guardar cada lote como array de bytes crudos (sin recomprimir)
+  const allDocxFiles = []; // [{name, data: Uint8Array}]
+  let processed = 0;
  
   try {
     while (processed < totalRows) {
-      progressLabel.textContent = `Generando fichas ${processed + 1}–${Math.min(processed + BATCH_SIZE, totalRows)} de ${totalRows}...`;
-      progressLog.textContent = `Lote ${Math.floor(processed/BATCH_SIZE)+1} de ${Math.ceil(totalRows/BATCH_SIZE)}`;
+      const batchNum = Math.floor(processed/BATCH_SIZE)+1;
+      const batchTotal = Math.ceil(totalRows/BATCH_SIZE);
+      progressLabel.textContent = `Generando lote ${batchNum} de ${batchTotal}...`;
+      progressLog.textContent = `Fichas ${processed + 1}–${Math.min(processed + BATCH_SIZE, totalRows)} de ${totalRows}`;
  
       const resp = await fetch('/.netlify/functions/generar', {
         method: 'POST',
@@ -358,36 +361,36 @@ async function generarFichas() {
  
       const result = await resp.json();
  
-      // Extraer archivos del ZIP parcial y agregarlos al ZIP maestro
+      // Extraer archivos del lote SIN recomprimir (STORE)
       const batchBytes = Uint8Array.from(atob(result.zipBase64), c => c.charCodeAt(0));
       const batchZip = await JSZip.loadAsync(batchBytes);
-      const fileNames = Object.keys(batchZip.files);
-      for (const fname of fileNames) {
-        const fileData = await batchZip.files[fname].async('uint8array');
-        masterZip.file(fname, fileData);
+      for (const [fname, file] of Object.entries(batchZip.files)) {
+        if (!file.dir) {
+          const data = await file.async('uint8array');
+          allDocxFiles.push({ name: fname, data });
+        }
       }
  
       processed = result.batchEnd;
-      const pct = Math.round((processed / totalRows) * 90);
+      const pct = Math.round((processed / totalRows) * 85);
       progressFill.style.width = pct + '%';
       progressCount.textContent = `${processed} / ${totalRows}`;
- 
       if (result.done) break;
     }
  
-    progressLabel.textContent = 'Comprimiendo ZIP final...';
-    progressFill.style.width = '95%';
+    // Construir ZIP final directamente en binario sin recomprimir
+    progressLabel.textContent = 'Empaquetando archivos...';
+    progressFill.style.width = '92%';
  
-    const finalZip = await masterZip.generateAsync({
-      type: 'blob',
-      compression: 'DEFLATE',
-      compressionOptions: { level: 6 }
-    });
+    // Pequeña pausa para que el navegador respire
+    await new Promise(r => setTimeout(r, 50));
  
-    zipBlob = finalZip;
+    const finalZip = buildZipStore(allDocxFiles);
+    zipBlob = new Blob([finalZip], { type: 'application/zip' });
+ 
     progressFill.style.width = '100%';
     progressCount.textContent = `${totalRows} / ${totalRows}`;
-    progressLabel.textContent = `✓ ${totalRows} fichas generadas correctamente`;
+    progressLabel.textContent = `✓ ${totalRows} fichas listas — ${(zipBlob.size/1024/1024).toFixed(1)} MB`;
     progressLog.textContent = '';
     btnDescargar.classList.add('show');
  
@@ -397,6 +400,79 @@ async function generarFichas() {
   } finally {
     btnGenerar.disabled = false;
   }
+}
+ 
+// Construye un ZIP sin compresión (STORE) directamente en binario
+// Mucho más rápido que JSZip.generateAsync con DEFLATE
+function buildZipStore(files) {
+  function u16(n) { return [n & 0xff, (n >> 8) & 0xff]; }
+  function u32(n) { return [n & 0xff, (n>>8)&0xff, (n>>16)&0xff, (n>>24)&0xff]; }
+ 
+  function crc32(buf) {
+    let c = 0xFFFFFFFF;
+    if (!crc32.t) {
+      crc32.t = new Uint32Array(256);
+      for (let i=0;i<256;i++) { let n=i; for(let j=0;j<8;j++) n=n&1?(n>>>1)^0xEDB88320:(n>>>1); crc32.t[i]=n; }
+    }
+    for (let i=0;i<buf.length;i++) c = crc32.t[(c^buf[i])&0xff]^(c>>>8);
+    return (c^0xFFFFFFFF)>>>0;
+  }
+ 
+  const localHeaders = [];
+  const centralDir = [];
+  let offset = 0;
+ 
+  for (const {name, data} of files) {
+    const nameBytes = new TextEncoder().encode(name);
+    const crc = crc32(data);
+    const lh = new Uint8Array([
+      0x50,0x4B,0x03,0x04,  // sig
+      0x14,0x00,            // version
+      0x00,0x00,            // flags
+      0x00,0x00,            // STORE (no compresión)
+      0x00,0x00,0x00,0x00,  // mod time/date
+      ...u32(crc),
+      ...u32(data.length),
+      ...u32(data.length),
+      ...u16(nameBytes.length),
+      0x00,0x00,
+      ...nameBytes,
+    ]);
+    const cd = new Uint8Array([
+      0x50,0x4B,0x01,0x02,
+      0x14,0x00,0x14,0x00,
+      0x00,0x00,0x00,0x00,
+      0x00,0x00,0x00,0x00,
+      ...u32(crc),
+      ...u32(data.length),
+      ...u32(data.length),
+      ...u16(nameBytes.length),
+      0x00,0x00,0x00,0x00,0x00,0x00,
+      0x00,0x00,0x00,0x00,
+      ...u32(offset),
+      ...nameBytes,
+    ]);
+    localHeaders.push({ lh, data });
+    centralDir.push(cd);
+    offset += lh.length + data.length;
+  }
+ 
+  const cdSize = centralDir.reduce((a,b)=>a+b.length, 0);
+  const eocd = new Uint8Array([
+    0x50,0x4B,0x05,0x06,
+    0x00,0x00,0x00,0x00,
+    ...u16(files.length), ...u16(files.length),
+    ...u32(cdSize), ...u32(offset),
+    0x00,0x00,
+  ]);
+ 
+  const totalSize = localHeaders.reduce((a,{lh,data})=>a+lh.length+data.length,0) + cdSize + eocd.length;
+  const out = new Uint8Array(totalSize);
+  let pos = 0;
+  for (const {lh, data} of localHeaders) { out.set(lh, pos); pos+=lh.length; out.set(data, pos); pos+=data.length; }
+  for (const cd of centralDir) { out.set(cd, pos); pos+=cd.length; }
+  out.set(eocd, pos);
+  return out;
 }
  
 function descargarZip() {
